@@ -1,0 +1,162 @@
+<%- include('partials/header'); -%>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.81/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.81/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/satellite.js/4.0.0/satellite.js"></script>
+  <link href="/public/style.css" rel="stylesheet">
+</head>
+<body>
+  <div id="loading">
+    <h1>Loading...</h1>
+  </div>
+  <div id="cesiumContainer"></div>
+
+  <!-- Elemento para a legenda -->
+  <div id="label" style="
+    position: absolute;
+    color: white;
+    padding: 5px;
+    background-color: rgba(0, 0, 0, 0.7);
+    border-radius: 5px;
+    display: none;
+  "></div>
+
+  <script>
+    // Inicializar o Cesium Viewer
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+      imageryProvider: new Cesium.TileMapServiceImageryProvider({
+        url: Cesium.buildModuleUrl("Assets/Textures/NaturalEarthII"),
+      }),
+      baseLayerPicker: false, 
+      geocoder: false, 
+      homeButton: true, 
+      infoBox: true,
+      navigationHelpButton: true, 
+      sceneModePicker: true
+    });
+
+    // Coordenadas TLE da ISS
+    const ISS_TLE = 
+    `1 25544U 98067A   21121.52590485  .00001448  00000-0  34473-4 0  9997
+    2 25544  51.6435 213.5204 0002719 305.2287 173.7124 15.48967392281368`;
+    const satrec = satellite.twoline2satrec(
+      ISS_TLE.split('\n')[0].trim(), 
+      ISS_TLE.split('\n')[1].trim()
+    );
+
+    // Tempo e posições
+    const totalSeconds = 60 * 60 * 6;
+    const timestepInSeconds = 10;
+
+    const start = Cesium.JulianDate.fromDate(new Date()); 
+    const stop = Cesium.JulianDate.addSeconds(start, totalSeconds, new Cesium.JulianDate());
+    viewer.clock.startTime = start.clone();
+    viewer.clock.stopTime = stop.clone();
+    viewer.clock.currentTime = start.clone();
+    viewer.timeline.zoomTo(start, stop);
+    viewer.clock.multiplier = 40;
+    viewer.clock.clockRange = Cesium.ClockRange.LOOP_STOP;
+
+    const positionsOverTime = new Cesium.SampledPositionProperty();
+    for (let i = 0; i < totalSeconds; i += timestepInSeconds) {
+      const time = Cesium.JulianDate.addSeconds(start, i, new Cesium.JulianDate());
+      const jsDate = Cesium.JulianDate.toDate(time);
+
+      const positionAndVelocity = satellite.propagate(satrec, jsDate);
+      const gmst = satellite.gstime(jsDate);
+      const p = satellite.eciToGeodetic(positionAndVelocity.position, gmst);
+
+      const position = Cesium.Cartesian3.fromRadians(p.longitude, p.latitude, p.height * 1000);
+      positionsOverTime.addSample(time, position);
+    }
+
+    // Visualizar a ISS como imagem e trajetória
+    const satellitePoint = viewer.entities.add({
+      position: positionsOverTime,
+      name: 'Estação Espacial Internacional (ISS)',
+      billboard: {
+        image: 'iss.png', // Caminho da imagem
+        width: 32,
+        height: 32,
+        verticalOrigin: Cesium.VerticalOrigin.CENTER,
+        horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+      },
+      label: {
+        text: 'ISS',
+        font: '14px sans-serif',
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        outlineWidth: 2,
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+        pixelOffset: new Cesium.Cartesian2(0, -20)
+      },
+      path: {
+        resolution: 120,
+        material: Cesium.Color.YELLOW.withAlpha(0.7),
+        width: 2,
+        leadTime: 0,
+        trailTime: 3600
+      },
+      description: `
+    <h3>Estação Espacial Internacional (ISS)</h3>
+    <p>A Estação Espacial Internacional é um laboratório espacial modular na órbita baixa da Terra.</p>
+    <ul>
+      <li><strong>Altitude Média:</strong> ~408 km</li>
+      <li><strong>Velocidade:</strong> ~7.66 km/s</li>
+      <li><strong>Orbita:</strong> Completa em ~90 minutos</li>
+    </ul>
+  `
+    });
+
+    // Após carregar o globo, dar zoom
+    let initialized = false;
+    viewer.scene.globe.tileLoadProgressEvent.addEventListener(() => {
+      if (!initialized && viewer.scene.globe.tilesLoaded === true) {
+        viewer.clock.shouldAnimate = true;
+        initialized = true;
+        viewer.scene.camera.zoomOut(7000000);
+        document.querySelector("#loading").classList.toggle('disappear', true);
+      }
+    });
+
+    // Adicionar legenda dinâmica ao clicar
+    const labelDiv = document.getElementById('label');
+    const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+
+    handler.setInputAction((click) => {
+      const pickedObject = viewer.scene.pick(click.position);
+
+      if (Cesium.defined(pickedObject) && pickedObject.id === satellitePoint) {
+        //viewer.trackedEntity = satellitePoint;
+        viewer.selectedEntity = pickedObject.id;
+
+
+        const updateLabel = () => {
+          const cartesian = satellitePoint.position.getValue(viewer.clock.currentTime);
+          const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+          const latitude = Cesium.Math.toDegrees(cartographic.latitude).toFixed(2);
+          const longitude = Cesium.Math.toDegrees(cartographic.longitude).toFixed(2);
+          const altitude = (cartographic.height / 1000).toFixed(2);
+
+          labelDiv.innerHTML = `Lat: ${latitude}°<br>Lon: ${longitude}°<br>Alt: ${altitude} km`;
+          const screenPosition = Cesium.SceneTransforms.wgs84ToWindowCoordinates(viewer.scene, cartesian);
+          if (screenPosition) {
+            labelDiv.style.left = `${screenPosition.x + 10}px`;
+            labelDiv.style.top = `${screenPosition.y - 20}px`;
+            labelDiv.style.display = 'block';
+          } else {
+            labelDiv.style.display = 'none';
+          }
+        };
+
+        viewer.clock.onTick.addEventListener(updateLabel);
+      }
+    }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+
+  </script>
+</body>
+</html>
+
+<%- include('partials/footer'); -%>

@@ -1,0 +1,4 @@
+{
+    "appService.defaultWebAppToDeploy": "/subscriptions/08938b4f-a3e7-4271-bb3b-4015b3ceb2b0/AppServices/subscriptions/08938b4f-a3e7-4271-bb3b-4015b3ceb2b0/resourceGroups/appsvc_linux_centralus/providers/Microsoft.Web/sites/AsteroidsDTTracker",
+    "appService.deploySubpath": "."
+}
